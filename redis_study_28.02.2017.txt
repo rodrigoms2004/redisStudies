@@ -1,0 +1,799 @@
+
+
+############################################################################################
+############################################################################################
+Chapter 1
+############################################################################################
+############################################################################################
+
+npm install redis
+
+$ cat hello.js 
+var redis = require("redis");
+var client = redis.createClient(); 
+client.set("my_key", "Hello World using Node.js and Redis");
+client.get("my_key", redis.print);
+client.quit();
+
+$ node hello.js 
+Reply: Hello World using Node.js and Redis
+
+##############################################
+
+Strigs <= 512 MB od text or binary data
+
+	Cache mechanisms: SET, GET, MSET and MGET
+	Cache with automatic expiration: SETEX, EXPIRE and EXPIREAT
+	Counting: INCR and INCRBY, other commands privided by String are: DECR, DECRBY and INCRFLOATBY
+
+
+$ redis-cli
+127.0.0.1:6379> MSET first "First Key value" second "Second Key value"
+OK
+127.0.0.1:6379> MGET first second
+1) "First Key value"
+2) "Second Key value"
+
+##############################################
+
+Building a voting system with Strings using Node.js
+
+127.0.0.1:6379> set article:12345:headline "Google Wants to Turn Your Clothes Into a Computer"
+OK
+127.0.0.1:6379> set article:10001:headline "For Millennials, the End of the TV Viewing Party"
+OK
+127.0.0.1:6379> set article:60056:headline "Alicia Vikander, Who Portrayed Denmark's Queen, Is Screen Royalty"
+OK
+
+
+$ cat articles-popularity.js 
+var redis = require("redis");
+var client = redis.createClient();
+
+function upVote(id) {
+	var key = "article:" + id + ":votes";
+	client.incr(key);
+}
+
+function downVote(id) {
+	var key = "article:" + id + ":votes";
+	client.decr(key);
+}
+
+function showResults(id) {
+	var headlineKey = "article:" + id + ":headline";
+	var voteKey = "article:" + id + ":votes";
+	client.mget([headlineKey, voteKey], function(err, replies) {
+		console.log('The article "' + replies[0] + '" has', replies[1], 'votes');
+	});
+}
+
+upVote(12345); // article:12345 has 1 vote
+upVote(12345); // article:12345 has 2 votes
+upVote(12345); // article:12345 has 3 votes
+upVote(10001); // article:10001 has 1 vote
+upVote(10001); // article:10001 has 2 votes
+downVote(10001); // article:10001 has 1 vote
+upVote(60056); // article:60056 has 1 vote
+
+showResults(12345);
+showResults(10001);
+showResults(60056);
+
+client.quit();
+
+node articles-popularity.js 
+The article "Google Wants to Turn Your Clothes Into a Computer" has 3 votes
+The article "For Millennials, the End of the TV Viewing Party" has 1 votes
+The article "Alicia Vikander, Who Portrayed Denmark's Queen, Is Screen Royalty" has 1 votes
+
+##############################################
+Lists
+
+The command LPUSH inserts data at the beginning of a List
+(left push), and the command RPUSH inserts data at the end of a List (right push):
+
+127.0.0.1:6379> LPUSH books "Clean Code"
+(integer) 1
+127.0.0.1:6379> RPUSH books "Code Complete"
+(integer) 2
+127.0.0.1:6379> LPUSH books "Peopleware"
+(integer) 3
+
+
+The command LLEN returns the length of a List. The command LINDEX returns
+the element in a given index (indices are zero-based). Elements in a List are always
+accessed from left to right, which means that index 0 is the first element, index 1
+is the second element, and so on. It is possible to use negative indices to access the
+tail of the List, in which -1 is the last element, -2 is penultimate element, and so on.
+LINDEX does not modify a List:
+
+127.0.0.1:6379> LLEN books
+(integer) 3
+127.0.0.1:6379> LINDEX books 1
+"Clean Code"
+
+The command LRANGE returns an array with all elements from a given index range,
+including the elements in both the start and end indices. As we mentioned previously,
+indices are zero-based and can be positive or negative. See the following example:
+
+127.0.0.1:6379> LRANGE books 0 1
+1) "Peopleware"
+2) "Clean Code"
+127.0.0.1:6379> LRANGE books 0 -1
+1) "Peopleware"
+2) "Clean Code"
+3) "Code Complete"
+
+
+The command LPOP removes and returns the first element of a List. The command
+RPOP removes and returns the last element of a List. Unlike LINDEX, both LPOP
+and RPOP modify the List:
+
+127.0.0.1:6379> LPOP books
+"Peopleware"
+127.0.0.1:6379> RPOP books
+"Code Complete"
+127.0.0.1:6379> LRANGE books 0 -1
+1) "Clean Code"
+
+
+##############################################
+Implementing a generic Queue System
+
+cat queue.js 
+function Queue(queueName, redisClient) {
+	this.queueName = queueName;
+	this.redisClient = redisClient;
+	this.queueKey = 'queues:' + queueName;
+	// Zero means no timeout
+	this.timeout = 0;
+}
+
+// size operation
+Queue.prototype.size = function(callback) {
+	this.redisClient.llen(this.queueKey, callback);
+};
+
+// push operation
+Queue.prototype.push = function(data) {
+	this.redisClient.lpush(this.queueKey, data);
+};
+
+// pop operation
+Queue.prototype.pop = function(callback) {
+	this.redisClient.brpop(this.queueKey, this.timeout, callback);
+};
+
+/*
+As we mentioned earlier, elements are inserted at the front of the queue and
+removed from the end of the queue, which is why BRPOP was used (if RPUSH
+was used, then BLPOP would be necessary).
+The command BRPOP removes the last element of a Redis List. If the List is empty,
+it waits until there is something to remove. BRPOP is a blocking version of RPOP.
+However, RPOP is not ideal. If the List is empty, we would need to implement some
+kind of polling by ourselves to make sure that items are handled as soon as they are
+added to the queue. It is better to take advantage of BRPOP and not worry about
+empty lists.
+*/
+
+
+exports.Queue = Queue;
+
+##############################################
+
+$ cat producer-worker.js 
+var redis = require("redis");
+var client = redis.createClient();
+var queue = require("./queue");
+var logsQueue = new queue.Queue("logs", client);
+var MAX = 5;
+for (var i = 0; i < MAX; i++) {
+	logsQueue.push("Hello world #" + i);
+}
+console.log("Created " + MAX + " logs");
+client.quit();
+
+##############################################
+
+$ node producer-worker.js 
+Created 5 logs
+
+##############################################
+
+cat consumer-worker.js 
+var redis = require("redis");
+var client = redis.createClient();
+var queue = require("./queue");
+var logsQueue = new queue.Queue("logs", client);
+
+function logMessages() {
+	logsQueue.pop(function(err, replies) {
+		var queueName = replies[0];
+		var message = replies[1];
+		console.log("[consumer Got log: " + message);
+
+		logsQueue.size(function(err, size) {
+			console.log(size + " logs left");
+		});
+
+		logMessages();
+	});
+}
+
+logMessages();
+
+
+##############################################
+
+$ node consumer-worker.js 
+[consumer Got log: Hello world #0
+4 logs left
+[consumer Got log: Hello world #1
+3 logs left
+[consumer Got log: Hello world #2
+2 logs left
+[consumer Got log: Hello world #3
+1 logs left
+[consumer Got log: Hello world #4
+0 logs left
+
+
+
+##############################################
+Using Hashes with redis-cli
+
+127.0.0.1:6379> HSET movie "title" "The Godfather"
+(integer) 1
+127.0.0.1:6379> HMSET movie "year" 1972 "rating" 9.2 "watchers" 10000000
+OK
+127.0.0.1:6379> HINCRBY movie "watchers" 3
+(integer) 10000003
+127.0.0.1:6379> HDEL movie "watchers"
+(integer) 1
+127.0.0.1:6379> HGETALL movie
+1) "title"
+2) "The Godfather"
+3) "year"
+4) "1972"
+5) "rating"
+6) "9.2"
+
+It is possible to retrieve only the field names or field values of a Hash with the
+commands HKEYS and HVALS respectively.
+In the next section, we are going to use Hashes to implement a voting system
+similar to the one presented with Strings.
+
+127.0.0.1:6379> HKEYS movie
+1) "title"
+2) "year"
+3) "rating"
+127.0.0.1:6379> HVALS movie
+1) "The Godfather"
+2) "1972"
+3) "9.2"
+
+
+##############################################
+A voting system with Hashes and Node.js
+
+
+$ cat hash-voting-system.js 
+var redis = require("redis");
+var client = redis.createClient();
+
+function saveLink(id, author, title, link) {
+	client.hmset("link:" + id, "author", author, "title", title, "link", link, "score", 0);
+}
+
+function upVote(id) {
+	client.hincrby("link:" + id, "score", 1);
+}
+
+function downVote(id) {
+	client.hincrby("link:" + id, "score", -1);
+}
+
+function showDetails(id) {
+	client.hgetall("link:" + id, function(err, replies) {
+		console.log("Title:", replies['title']);
+		console.log("Author:", replies['author']);
+		console.log("Link:", replies['link']);
+		console.log("Score:", replies['score']);
+		console.log("--------------------------");
+	});
+}
+
+
+saveLink(123, "dayvson", "Maxwell Dayvson's Github page", "https://github.com/dayvson");
+upVote(123);
+upVote(123);
+
+saveLink(456, "hltbra", "Hugo Tavares's Github page", "https://github.com/hltbra");
+
+upVote(456);
+upVote(456);
+downVote(456);
+
+showDetails(123);
+showDetails(456);
+
+client.quit();
+
+##############################################
+
+$ node hash-voting-system.js 
+Title: Maxwell Dayvson's Github page
+Author: dayvson
+Link: https://github.com/dayvson
+Score: 2
+--------------------------
+Title: Hugo Tavares's Github page
+Author: hltbra
+Link: https://github.com/hltbra
+Score: 1
+--------------------------
+
+
+############################################################################################
+############################################################################################
+Chapter 2 Advanced Data Types
+############################################################################################
+############################################################################################
+
+
+##############################################
+SETs
+
+Set examples with redis-cli
+
+127.0.0.1:6379> SADD user:max:favorite_artists "Arcade Fire" "Arctic Monkeys" "Belle & Sebastian" "Lenine"
+(integer) 4
+
+127.0.0.1:6379> SADD user:hugo:favorite_artists "Daft Punk" "The Kooks" "Arctic Monkeys"
+(integer) 3
+
+##############################################
+
+The command SINTER expects one or many Sets and returns an array with the
+members that belong to every Set. In this example, SINTER returns only the favorite
+artists that both Max and Hugo have on their lists:
+
+SINTER user:max:favorite_artists user:hugo:favorite_artists
+1) "Arctic Monkeys"
+
+##############################################
+
+The command SDIFF expects one or many Sets. It returns an array with all members
+of the first Set that do not exist in the Sets that follow it. In this command, the key
+name order matters. Any key that does not exist is considered to be an empty Set.
+There are two ways of using the command SDIFF.
+The first example returns the names of artists from user:max:favorite_artists that are
+not present in user:hugo:favorite_artists:
+
+127.0.0.1:6379> SDIFF user:max:favorite_artists user:hugo:favorite_artists
+1) "Arcade Fire"
+2) "Belle & Sebastian"
+3) "Lenine"
+
+
+The second example returns the names of artists from user:hugo:favorite_artists that
+are not present in user:max:favorite_artists:
+
+127.0.0.1:6379> SDIFF user:hugo:favorite_artists user:max:favorite_artists
+1) "The Kooks"
+2) "Daft Punk"
+
+##############################################
+
+The SUNION command expects one or many Sets. It returns an array with all
+members of all Sets. The result has no repeated members.
+In this example, SUNION returns the names of all artists in both users' Sets of
+favorite artists:
+
+127.0.0.1:6379> SUNION user:max:favorite_artists user:hugo:favorite_artists
+1) "The Kooks"
+2) "Arctic Monkeys"
+3) "Daft Punk"
+4) "Lenine"
+5) "Belle & Sebastian"
+6) "Arcade Fire"
+
+##############################################
+
+The command SRANDMEMBER returns random members from a Set. Because Sets
+are unordered, it is not possible to retrieve elements from a given position:
+
+127.0.0.1:6379> SRANDMEMBER user:max:favorite_artists
+"Lenine"
+127.0.0.1:6379> SRANDMEMBER user:max:favorite_artists
+"Arctic Monkeys"
+127.0.0.1:6379> SRANDMEMBER user:hugo:favorite_artists
+"The Kooks"
+127.0.0.1:6379> SRANDMEMBER user:hugo:favorite_artists
+"Arctic Monkeys"
+
+##############################################
+
+The command SISMEMBER checks whether a member exists in a Set. It returns 1
+if the member exists and 0 if it does not.
+The command SREM removes and returns members from a Set. The command
+SCARD returns the number of members in a Set (also known as cardinality):
+
+127.0.0.1:6379> SISMEMBER user:max:favorite_artists "Arctic Monkeys"
+(integer) 1
+127.0.0.1:6379> SREM user:max:favorite_artists "Arctic Monkeys"
+(integer) 1
+127.0.0.1:6379> SISMEMBER user:max:favorite_artists "Arctic Monkeys"
+(integer) 0
+127.0.0.1:6379> SCARD user:max:favorite_artists
+(integer) 3
+
+##############################################
+
+The command SMEMBERS returns an array with all members of a Set:
+
+127.0.0.1:6379> SMEMBERS user:max:favorite_artists
+1) "Lenine"
+2) "Belle & Sebastian"
+3) "Arcade Fire"
+
+##############################################
+
+Building a deal tracking system
+
+$ cat deal-metrics.js
+var redis = require("redis");
+var client = redis.createClient();
+
+function markDealAsSent(dealId, userId) {
+	client.sadd(dealId, userId);
+}
+
+function sendDealIfNotSent(dealId, userId) {
+	client.sismember(dealId, userId, function(err, reply) {
+		if (reply) {
+			console.log("Deal", dealId, "was already sent to user", userId);
+		} else {
+			console.log("Sending", dealId, "to user", userId);
+			// code to send the deal to the user would go here...
+			markDealAsSent(dealId, userId);
+		}
+	});
+}
+
+
+function showUsersThatReceivedAllDeals(dealIds) {
+	client.sinter(dealIds, function(err, reply) {
+		console.log(reply + " received all of the deals: " + dealIds);	
+	});
+}
+
+function showUsersThatReceivedAtLeastOneOfTheDeals(dealIds) {
+	client.sunion(dealIds, function(err, reply) {
+		console.log(reply + " received at least one of the deals: " + dealIds);
+	});
+}
+
+markDealAsSent('deal:1', 'user:1');	// ***
+markDealAsSent('deal:1', 'user:2');	// ***
+markDealAsSent('deal:2', 'user:1');	// ***
+markDealAsSent('deal:2', 'user:3');	// ***
+
+sendDealIfNotSent('deal:1', 'user:1'); // $$$
+sendDealIfNotSent('deal:1', 'user:2'); // &&&
+sendDealIfNotSent('deal:1', 'user:3'); // %%%
+
+
+showUsersThatReceivedAllDeals(["deal:1", "deal:2"]); // @@@
+showUsersThatReceivedAtLeastOneOfTheDeals(["deal:1", "deal:2"]); // !!!
+
+client.quit();
+
+##############################################
+Same program, but in CLI
+
+// ***
+127.0.0.1:6379> SADD deal:1 "user:1" "user:2"
+(integer) 2
+127.0.0.1:6379> SADD deal:2 "user:1" "user:3"
+(integer) 2
+
+// $$$
+127.0.0.1:6379> SISMEMBER deal:1 user:1
+(integer) 1
+
+// &&&
+127.0.0.1:6379> SISMEMBER deal:1 user:2
+(integer) 1
+
+// %%%
+127.0.0.1:6379> SISMEMBER deal:1 user:3
+(integer) 0
+127.0.0.1:6379> SADD deal:1 "user:3" 
+(integer) 1
+
+// @@@
+127.0.0.1:6379> SINTER deal:1 deal:2
+1) "user:3"
+2) "user:1"
+
+// !!!
+127.0.0.1:6379> SUNION deal:1 deal:2
+1) "user:1"
+2) "user:3"
+3) "user:2"
+
+##############################################
+
+$ node deal-metrics.js 
+Deal deal:1 was already sent to user user:1
+Deal deal:1 was already sent to user user:2
+Sending deal:1 to user user:3
+user:1 received all of the deals: deal:1,deal:2
+user:3,user:1,user:2 received at least one of the deals: deal:1,deal:2
+
+##############################################
+SORTED SETs
+
+127.0.0.1:6379> ZADD leaders 100 "Alice"
+(integer) 1
+127.0.0.1:6379> ZADD leaders 100 "Zed"
+(integer) 1
+127.0.0.1:6379> ZADD leaders 102 "Hugo"
+(integer) 1
+127.0.0.1:6379> ZADD leaders 101 "Max"
+(integer) 1
+
+127.0.0.1:6379> ZREVRANGE leaders 0 -1
+1) "Hugo"
+2) "Max"
+3) "Zed"
+4) "Alice"
+
+127.0.0.1:6379> ZRANGE leaders 0 -1
+1) "Alice"
+2) "Zed"
+3) "Max"
+4) "Hugo"
+
+127.0.0.1:6379> ZREVRANGE leaders 0 -1 WITHSCORES
+1) "Hugo"
+2) "102"
+3) "Max"
+4) "101"
+5) "Zed"
+6) "100"
+7) "Alice"
+8) "100"
+
+The ZREM command removes a member from a Sorted Set:
+
+127.0.0.1:6379> ZREM leaders "Hugo"
+(integer) 1
+127.0.0.1:6379> ZREVRANGE leaders 0 -1
+1) "Max"
+2) "Zed"
+3) "Alice"
+
+127.0.0.1:6379> ZSCORE leaders "Max"
+"101"
+127.0.0.1:6379> ZRANK leaders "Max"
+(integer) 2
+127.0.0.1:6379> ZREVRANK leaders "Max"
+(integer) 0
+
+
+##############################################
+Building a leaderboard system for an
+online game
+
+$ cat leaderboard.js 
+var redis = require("redis");
+var client = redis.createClient();
+
+function LeaderBoard(key) { 
+	this.key = key; 
+}
+
+
+LeaderBoard.prototype.addUser = function(username, score) { 
+		client.zadd([this.key, score, username], function(err, replies) {
+		console.log("User", username,"added to the leaderboard!"); 
+	});
+};
+
+LeaderBoard.prototype.removeUser = function(username) { 
+		client.zrem(this.key, username, function(err, replies) { 
+		console.log("User", username, "removed successfully!"); 
+	});
+};
+
+LeaderBoard.prototype.getUserScoreAndRank = function(username) { 
+var leaderboardKey = this.key; 
+	client.zscore(leaderboardKey, username, function(err, zscoreReply) {
+			client.zrevrank(leaderboardKey, username, function(err, zrevrankReply) { 
+			console.log("\nDetails of " + username + ":");
+			console.log("Score:", zscoreReply + ", Rank: #" +(zrevrankReply + 1)); 
+		});
+	});
+};
+
+
+LeaderBoard.prototype.showTopUsers = function(quantity) { 
+	client.zrevrange([this.key, 0, quantity - 1, "WITHSCORES"],function(err, reply) {
+		console.log("\nTop", quantity, "users:");
+		for (var i = 0, rank = 1 ; i < reply.length ; i += 2, rank++) {// 3
+			console.log("#" + rank, "User: " + reply[i] + ", score:", reply[i + 1]);
+		}		
+	});
+};
+
+LeaderBoard.prototype.getUsersAroundUser = function(username, quantity, callback) {
+	var leaderboardKey = this.key; 
+	client.zrevrank(leaderboardKey, username, function(err, zrevrankReply) { 
+		var startOffset = Math.floor(zrevrankReply - (quantity / 2) + 1);
+
+		if (startOffset < 0) { 
+			startOffset = 0;
+		}
+		
+		var endOffset = startOffset + quantity - 1; 
+		client.zrevrange([leaderboardKey, startOffset, endOffset, "WITHSCORES"],
+		function(err, zrevrangeReply) { 
+			var users = []; 
+			for (var i = 0, rank = 1 ; i < zrevrangeReply.length ; i += 2, rank++) { 
+				var user = {rank: startOffset + rank, score: zrevrangeReply[i + 1], username: zrevrangeReply[i],};
+				users.push(user); 
+			}
+			callback(users); // 12
+		});
+	});
+};
+
+var leaderBoard = new LeaderBoard("game-score");
+leaderBoard.addUser("Arthur", 70);
+leaderBoard.addUser("KC", 20);
+leaderBoard.addUser("Maxwell", 10);
+leaderBoard.addUser("Patrik", 30);
+leaderBoard.addUser("Ana", 60);
+leaderBoard.addUser("Felipe", 40);
+leaderBoard.addUser("Renata", 50);
+leaderBoard.addUser("Hugo", 80);
+leaderBoard.removeUser("Arthur");
+leaderBoard.getUserScoreAndRank("Maxwell");
+leaderBoard.showTopUsers(3);
+
+
+leaderBoard.getUsersAroundUser("Felipe", 5, function(users) {
+	console.log("\nUsers around Felipe:");
+	users.forEach(function(user) {
+		console.log("#" + user.rank, "User:", user.username + ", score:", user.score);
+	});
+	client.quit();
+});
+
+##############################################
+
+$ node leaderboard.js 
+User Arthur added to the leaderboard!
+User KC added to the leaderboard!
+User Maxwell added to the leaderboard!
+User Patrik added to the leaderboard!
+User Ana added to the leaderboard!
+User Felipe added to the leaderboard!
+User Renata added to the leaderboard!
+User Hugo added to the leaderboard!
+User Arthur removed successfully!
+
+Top 3 users:
+#1 User: Hugo, score: 80
+#2 User: Ana, score: 60
+#3 User: Renata, score: 50
+
+Details of Maxwell:
+Score: 10, Rank: #7
+
+Users around Felipe:
+#2 User: Ana, score: 60
+#3 User: Renata, score: 50
+#4 User: Felipe, score: 40
+#5 User: Patrik, score: 30
+#6 User: KC, score: 20
+
+##############################################
+BITMAPS
+
+$ cat metrics-bitmap.js 
+var redis = require("redis");
+var client = redis.createClient({return_buffers: true});
+
+function storeDailyVisit(date, userId) {
+	var key = 'visits:daily:' + date;
+	client.setbit(key, userId, 1, function(err, reply) {
+		console.log("User", userId, "visited on", date);
+	});
+}
+
+function countVisits(date) {
+	var key = 'visits:daily:' + date;
+	client.bitcount(key, function(err, reply) {
+		console.log(date, "had", reply, "visits.");
+	});
+}
+
+function showUserIdsFromVisit(date) {
+	var key = 'visits:daily:' + date;
+	client.get(key, function(err, bitmapValue) {
+		var userIds = [];
+		var data = bitmapValue.toJSON().data;
+
+		data.forEach(function(byte, byteIndex) {
+			for (var bitIndex = 7 ; bitIndex >= 0 ; bitIndex--) {
+				var visited = byte >> bitIndex & 1;
+				if (visited === 1) {
+					var userId = byteIndex * 8 + (7 - bitIndex);
+					userIds.push(userId);
+				}
+			}
+		});
+		console.log("Users " + userIds + " visited on " + date);		
+	});
+}
+
+storeDailyVisit('2015-01-01', '1');
+storeDailyVisit('2015-01-01', '2');
+storeDailyVisit('2015-01-01', '10');
+storeDailyVisit('2015-01-01', '55');
+
+
+countVisits('2015-01-01');
+showUserIdsFromVisit('2015-01-01');
+
+client.quit();
+
+##############################################
+
+$ node metrics-bitmap.js 
+User 1 visited on 2015-01-01
+User 2 visited on 2015-01-01
+User 10 visited on 2015-01-01
+User 55 visited on 2015-01-01
+2015-01-01 had 4 visits.
+Users 1,2,10,55 visited on 2015-01-01
+
+
+##############################################
+
+HyperLogLogs
+
+Counting and retrieving unique website visits
+
+
+##############################################
+
+
+
+############################################################################################
+############################################################################################
+Chapter 3
+############################################################################################
+############################################################################################
+
+
+
+############################################################################################
+############################################################################################
+Chapter 4
+############################################################################################
+############################################################################################
+
+
+
+############################################################################################
+############################################################################################
+Chapter 2
+############################################################################################
+############################################################################################
+
+

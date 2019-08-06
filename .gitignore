@@ -1,0 +1,6 @@
+node_modules
+*~
+*.tar.gz
+*.deb
+redis-3*
+redis-4*

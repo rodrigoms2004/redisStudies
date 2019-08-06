@@ -1,0 +1,79 @@
+127.0.0.1:6379> ping
+PONG
+127.0.0.1:6379> echo hello
+"hello"
+127.0.0.1:6379> SET foo 100
+OK
+127.0.0.1:6379> GET foo
+"100"
+127.0.0.1:6379> INCR foo
+(integer) 101
+127.0.0.1:6379> GET foo
+"101"
+127.0.0.1:6379> INCR foo
+(integer) 102
+127.0.0.1:6379> GET foo
+"102"
+127.0.0.1:6379> DECR foo
+(integer) 101
+127.0.0.1:6379> set bar 200
+OK
+127.0.0.1:6379> get bar 
+"200"
+127.0.0.1:6379> exists bar
+(integer) 1
+127.0.0.1:6379> EXISTS bar
+(integer) 1
+127.0.0.1:6379> EXISTS bar2
+(integer) 0
+127.0.0.1:6379> DEL bar
+(integer) 1
+127.0.0.1:6379> EXISTS bar
+(integer) 0
+
+
+$ redis-cli ECHO Hello
+"Hello"
+$ redis-cli INCR foo > commands.txt
+$ cat commands.txt 
+102
+
+
+127.0.0.1:6379> FLUSHALL
+OK
+127.0.0.1:6379> get foo
+(nil)
+127.0.0.1:6379> get bar
+(nil)
+
+
+27.0.0.1:6379> SET server:name myserver
+OK
+127.0.0.1:6379> GET server:name
+"myserver"
+127.0.0.1:6379> SET server:port 6379
+OK
+127.0.0.1:6379> GET server:port
+"6379"
+
+(nil)
+127.0.0.1:6379> SET resource:foo hello
+OK
+127.0.0.1:6379> EXPIRE resource:foo 120
+(integer) 1
+127.0.0.1:6379> TTL resource:foo
+(integer) 101
+127.0.0.1:6379> TTL resource:foo
+(integer) 100
+127.0.0.1:6379> TTL resource:foo
+(integer) 97
+127.0.0.1:6379> TTL resource:foo
+(integer) -2
+
+127.0.0.1:6379> SET resource:foo hello
+OK
+127.0.0.1:6379> TTL resource:foo
+(integer) -1
+
+
+
